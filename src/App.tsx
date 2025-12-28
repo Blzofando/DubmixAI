@@ -121,7 +121,7 @@ const App: React.FC = () => {
         ...s,
         translatedText: '',
         audioBuffer: s.audioBuffer || null
-      }));
+      })) as DubSegment[];
 
       setState(prev => ({ 
         ...prev, 
@@ -329,7 +329,7 @@ const App: React.FC = () => {
             state.segments.map(s => ({ 
                 startTime: s.start, 
                 endTime: s.end,
-                audioBuffer: s.audioBuffer 
+                audioBuffer: s.audioBuffer || null
             }))
         );
         const url = URL.createObjectURL(blob);
