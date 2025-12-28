@@ -41,7 +41,6 @@ export class AudioService {
       // 2. Try to decode as Raw PCM (16-bit, 24kHz Mono - Gemini Standard)
       try {
         const pcmBuffer = this.rawPcmToAudioBuffer(bytes.buffer, 24000);
-        // Optimize: Trim Silence immediately after decoding
         return this.trimSilence(pcmBuffer);
       } catch (pcmError) {
         // Fallback
@@ -56,35 +55,28 @@ export class AudioService {
     }
   }
 
-  /**
-   * Trims silence from the beginning and end of an AudioBuffer
-   */
   trimSilence(buffer: AudioBuffer): AudioBuffer {
     const data = buffer.getChannelData(0);
     const len = data.length;
     let start = 0;
     let end = len;
-    const threshold = 0.005; // Sensitivity for silence detection
+    const threshold = 0.005;
 
-    // Find start
     while (start < len && Math.abs(data[start]) < threshold) {
       start++;
     }
 
-    // Find end
     while (end > start && Math.abs(data[end - 1]) < threshold) {
       end--;
     }
 
     if (start >= end) {
-      // Return original if empty or full silence (to avoid errors)
       return buffer;
     }
 
     const newLen = end - start;
     const newBuffer = this.audioContext.createBuffer(buffer.numberOfChannels, newLen, buffer.sampleRate);
     
-    // Copy channel data
     for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
       const oldData = buffer.getChannelData(channel);
       const newData = newBuffer.getChannelData(channel);
@@ -96,46 +88,41 @@ export class AudioService {
     return newBuffer;
   }
 
-  /**
-   * Manual decoding of Raw PCM data (Int16 Array) into an AudioBuffer.
-   */
   private rawPcmToAudioBuffer(arrayBuffer: ArrayBuffer, sampleRate: number): AudioBuffer {
     const dataInt16 = new Int16Array(arrayBuffer);
     const numChannels = 1;
     const frameCount = dataInt16.length;
     
-    // Create an empty AudioBuffer
     const audioBuffer = this.audioContext.createBuffer(numChannels, frameCount, sampleRate);
     
-    // Copy data to the buffer (Float32 [-1.0, 1.0])
     const channelData = audioBuffer.getChannelData(0);
     for (let i = 0; i < frameCount; i++) {
-      // Convert Int16 (-32768 to 32767) to Float32 (-1.0 to 1.0)
       channelData[i] = dataInt16[i] / 32768.0;
     }
 
     return audioBuffer;
   }
 
+  // --- AQUI ESTAVA O PROBLEMA ---
   async exportMix(
     originalBuffer: AudioBuffer,
     segments: { startTime: number; endTime: number; audioBuffer: AudioBuffer | null }[],
     backgroundVolume: number = 0.0
   ): Promise<Blob> {
-    // 1. Calculate total duration
     let totalDuration = originalBuffer.duration;
-    // Ensure total duration includes the last dub segment if it extends beyond original
     segments.forEach(seg => {
         if(seg.endTime > totalDuration) totalDuration = seg.endTime;
     });
 
-    const offlineCtx = new OfflineAudioContext(
-      2, // Stereo output
+    // FIX 1: Compatibilidade com iOS/WebKit (iPhone)
+    const OfflineContext = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+    const offlineCtx = new OfflineContext(
+      2, 
       totalDuration * originalBuffer.sampleRate,
       originalBuffer.sampleRate
     );
 
-    // 2. Setup Background Track (Muted)
+    // Background Track
     if (backgroundVolume > 0) {
         const bgSource = offlineCtx.createBufferSource();
         bgSource.buffer = originalBuffer;
@@ -146,26 +133,26 @@ export class AudioService {
         bgSource.start(0);
     }
 
-    // 3. Setup Dubbed Segments with Time Compression
+    // Dubbed Segments
     segments.forEach((seg) => {
       if (seg.audioBuffer) {
         const source = offlineCtx.createBufferSource();
-        source.buffer = seg.audioBuffer;
         
+        // FIX 2: Definir preservesPitch ANTES de tudo para garantir
+        (source as any).preservesPitch = true;
+        (source as any).webkitPreservesPitch = true; // Forçar em WebKits antigos
+
         const slotDuration = seg.endTime - seg.startTime;
         const originalDuration = seg.audioBuffer.duration;
-        
-        // Calculate rate to fit strictly into the slot
         let rate = 1.0;
+        
         if (originalDuration > slotDuration) {
-            // Speed up to fit
             rate = originalDuration / slotDuration;
         }
 
         source.playbackRate.value = rate;
-        // IMPORTANT: preservesPitch = true ensures we change speed WITHOUT changing the tone (chipmunk effect)
-        (source as any).preservesPitch = true; 
-
+        source.buffer = seg.audioBuffer;
+        
         source.connect(offlineCtx.destination);
         source.start(seg.startTime);
       }
@@ -186,22 +173,31 @@ export class AudioService {
       offset = 0,
       pos = 0;
 
-    // write WAVE header
+    function setUint16(data: number) {
+      view.setUint16(pos, data, true);
+      pos += 2;
+    }
+
+    function setUint32(data: number) {
+      view.setUint32(pos, data, true);
+      pos += 4;
+    }
+
     setUint32(0x46464952); // "RIFF"
-    setUint32(length - 8); // file length - 8
+    setUint32(length - 8); 
     setUint32(0x45564157); // "WAVE"
 
     setUint32(0x20746d66); // "fmt " chunk
-    setUint32(16); // length = 16
-    setUint16(1); // PCM (uncompressed)
+    setUint32(16); 
+    setUint16(1); 
     setUint16(numOfChan);
     setUint32(abuffer.sampleRate);
-    setUint32(abuffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
-    setUint16(numOfChan * 2); // block-align
-    setUint16(16); // 16-bit (hardcoded in this writer)
+    setUint32(abuffer.sampleRate * 2 * numOfChan); 
+    setUint16(numOfChan * 2); 
+    setUint16(16); 
 
     setUint32(0x61746164); // "data" - chunk
-    setUint32(length - pos - 4); // chunk length
+    setUint32(length - pos - 4); 
 
     for (i = 0; i < abuffer.numberOfChannels; i++)
       channels.push(abuffer.getChannelData(i));
@@ -217,16 +213,6 @@ export class AudioService {
     }
 
     return new Blob([buffer], { type: "audio/wav" });
-
-    function setUint16(data: number) {
-      view.setUint16(pos, data, true);
-      pos += 2;
-    }
-
-    function setUint32(data: number) {
-      view.setUint32(pos, data, true);
-      pos += 4;
-    }
   }
 }
 
