@@ -102,6 +102,7 @@ const App: React.FC = () => {
   };
 
   // --- Step 1: Transcribe ---
+    // --- Step 1: Transcribe ---
   const handleTranscribe = async () => {
     if (!state.file || !state.originalBuffer) return;
 
@@ -117,11 +118,16 @@ const App: React.FC = () => {
         state.customApiKey
       );
       
+      // CORREÇÃO AQUI: Criamos o objeto novo explicitamente
       const segments: DubSegment[] = rawSegments.map(s => ({
-        ...s,
+        id: s.id,
+        start: s.start,
+        end: s.end,
+        originalText: s.originalText,
+        duration: s.duration,
         translatedText: '',
-        audioBuffer: s.audioBuffer || null
-      })) as DubSegment[];
+        audioBuffer: null
+      }));
 
       setState(prev => ({ 
         ...prev, 
@@ -135,6 +141,7 @@ const App: React.FC = () => {
       setState(prev => ({ ...prev, status: ProcessingStatus.ERROR, error: err.message || "Transcription failed." }));
     }
   };
+
 
   // --- Step 2: Translate (Batch Optimized) ---
   const handleTranslate = async () => {
